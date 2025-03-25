@@ -5,15 +5,7 @@ import numpy as np
 def align_images(gray: np.ndarray, rgb: np.ndarray) -> np.ndarray:
     """
     Aligns the RGB image to the grayscale image using ORB keypoints and homography.
-
     """
-    assert len(gray.shape) == 2, (
-        f"Expected gray image with shape (H, W), got {gray.shape}"
-    )
-    assert len(rgb.shape) == 3 and rgb.shape[2] == 3, (
-        f"Expected RGB image with shape (H, W, 3), got {rgb.shape}"
-    )
-
     assert len(gray.shape) == 2, (
         f"Expected gray image with shape (H, W), got {gray.shape}"
     )
