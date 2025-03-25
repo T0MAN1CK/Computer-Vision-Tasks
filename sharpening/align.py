@@ -2,7 +2,25 @@ import cv2
 import numpy as np
 
 
-def align_images(gray, rgb):
+def align_images(gray: np.ndarray, rgb: np.ndarray) -> np.ndarray:
+    """
+    Aligns the RGB image to the grayscale image using ORB keypoints and homography.
+
+    """
+    assert len(gray.shape) == 2, (
+        f"Expected gray image with shape (H, W), got {gray.shape}"
+    )
+    assert len(rgb.shape) == 3 and rgb.shape[2] == 3, (
+        f"Expected RGB image with shape (H, W, 3), got {rgb.shape}"
+    )
+
+    assert len(gray.shape) == 2, (
+        f"Expected gray image with shape (H, W), got {gray.shape}"
+    )
+    assert len(rgb.shape) == 3 and rgb.shape[2] == 3, (
+        f"Expected RGB image with shape (H, W, 3), got {rgb.shape}"
+    )
+
     orb = cv2.ORB_create(5000)
     kp1, des1 = orb.detectAndCompute(gray, None)
     rgb_gray = cv2.cvtColor(rgb, cv2.COLOR_BGR2GRAY)
@@ -17,5 +35,7 @@ def align_images(gray, rgb):
     pts2 = np.float32([kp2[m.trainIdx].pt for m in matches]).reshape(-1, 1, 2)
 
     H, _ = cv2.findHomography(pts2, pts1, cv2.RANSAC)
+    assert H is not None, "Homography computation failed."
+
     aligned = cv2.warpPerspective(rgb, H, (gray.shape[1], gray.shape[0]))
     return aligned
