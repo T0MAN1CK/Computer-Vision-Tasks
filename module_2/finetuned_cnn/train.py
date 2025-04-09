@@ -1,78 +1,62 @@
 # ruff: noqa: E402
 
-import sys
-import os
-import pytorch_lightning as pl
-from pytorch_lightning.loggers import WandbLogger
-from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
 import torch
-import wandb
+import sys
+from pathlib import Path
 
-script_dir = os.path.dirname(os.path.abspath(__file__))
-module_2_dir = os.path.dirname(script_dir)
-sys.path.insert(0, module_2_dir)
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from finetuned_cnn.models.model import FinetunedResNet
-from finetuned_cnn.datamodule import ClassificationDataModule
+from pathlib import Path
+from models.model import FinetunedResNet
+from shared.litmodule import LitClassifier
+from shared.train_utils import train_model
+from shared.datamodule import UniversalDataModule
 
 
 def main():
-    pl.seed_everything(42)
+    torch.set_float32_matmul_precision("medium")
 
-    os.makedirs("module_2/finetuned_cnn/checkpoints", exist_ok=True)
-    os.makedirs("module_2/finetuned_cnn/wandblogs", exist_ok=True)
+    base_dir = Path(__file__).parent.parent
+    data_dir = base_dir / "Classification_data"
+    logs_dir = base_dir / "finetuned_cnn" / "wandblogs"
+    checkpoint_dir = base_dir / "finetuned_cnn" / "checkpoints"
 
-    model = FinetunedResNet(num_classes=6, lr=1e-3, finetune=True)
-    datamodule = ClassificationDataModule(
-        data_dir="module_2/Classification_data", batch_size=256, val_split=0.2
+    config = {
+        "batch_size": 256,
+        "lr": 1e-3,
+        "weight_decay": 1e-4,
+        "num_classes": 6,
+        "max_epochs": 25,
+        "architecture": "finetuned-resnet18",
+    }
+
+    backbone = FinetunedResNet(num_classes=config["num_classes"])
+    lit_model = LitClassifier(
+        model=backbone,
+        num_classes=config["num_classes"],
+        lr=config["lr"],
+        weight_decay=config["weight_decay"],
     )
 
-    wandb_logger = WandbLogger(
-        project="finetuned-cnn-classification",
-        name="training-run",
-        save_dir="module_2/finetuned_cnn/wandblogs",
-        log_model=False,
-        config={
-            "batch_size": 256,
-            "lr": 1e-3,
-            "weight_decay": 1e-4,
-            "num_classes": 6,
-            "max_epochs": 25,
-            "architecture": "finetuned-resnet18",
-        },
-    )
-    wandb_logger.watch(model, log="all", log_freq=100)
-
-    checkpoint_callback = ModelCheckpoint(
-        monitor="val_acc",
-        mode="max",
-        save_top_k=1,
-        dirpath="module_2/finetuned_cnn/checkpoints",
-        filename="resnet18-{epoch:02d}-{val_acc:.2f}",
-    )
-    lr_monitor = LearningRateMonitor(logging_interval="epoch")
-
-    trainer = pl.Trainer(
-        max_epochs=25,
-        accelerator="gpu",
-        precision=16,
-        logger=wandb_logger,
-        callbacks=[checkpoint_callback, lr_monitor],
-        log_every_n_steps=50,
+    datamodule = UniversalDataModule(
+        data_dir=str(data_dir),
+        batch_size=config["batch_size"],
+        val_split=0.2,
+        resize=(150, 150),
+        use_kornia_aug=True,
     )
 
-    trainer.fit(model, datamodule=datamodule)
-
-    print("\n" + "=" * 50)
-    print(
-        f"Best model achieved validation accuracy: {checkpoint_callback.best_model_score:.4f}"
+    train_model(
+        model_name="resnet18-bs256-lr1e3",
+        model=lit_model,
+        datamodule=datamodule,
+        config=config,
+        wandb_project="image-classification",
+        logs_dir=str(logs_dir),
+        checkpoint_dir=str(checkpoint_dir),
+        group_name="FinetunedCNN",
     )
-    print(f"Best model saved at: {checkpoint_callback.best_model_path}")
-    print("=" * 50 + "\n")
-
-    wandb.finish()
 
 
 if __name__ == "__main__":
-    torch.set_float32_matmul_precision("medium")
     main()

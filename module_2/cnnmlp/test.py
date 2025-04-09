@@ -1,99 +1,80 @@
-import glob
+# ruff: noqa: E402
+
 import torch
 import wandb
+import glob
+import sys
 from pathlib import Path
-import torch.nn.functional as F
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from pathlib import Path
+from shared.test_utils import evaluate_metrics, log_misclassified_images
+from shared.datamodule import UniversalDataModule
+from shared.litmodule import LitClassifier
 from models.cnn_mlp import CNNMLPClassifier
-from data.dataset import ClassificationDataModule, CLASS_NAMES
-
-
-def log_test_metrics(model, dataloader):
-    model.eval()
-    total_correct = 0
-    total_samples = 0
-    total_loss = 0.0
-
-    with torch.no_grad():
-        for imgs, labels in dataloader:
-            imgs, labels = imgs.cuda(), labels.cuda()
-            outputs = model(imgs)
-            loss = F.cross_entropy(outputs, labels)
-            preds = torch.argmax(outputs, dim=1)
-            total_correct += (preds == labels).sum().item()
-            total_samples += labels.size(0)
-            total_loss += loss.item() * labels.size(0)
-
-    avg_loss = total_loss / total_samples
-    avg_acc = total_correct / total_samples
-
-    wandb.log({"test/loss": avg_loss, "test/accuracy": avg_acc})
-
-    return avg_loss, avg_acc
-
-
-def log_misclassified_images(model, dataloader, num_images=25):
-    model.eval()
-    misclassified = []
-
-    with torch.no_grad():
-        for imgs, labels in dataloader:
-            imgs, labels = imgs.cuda(), labels.cuda()
-            outputs = model(imgs)
-            preds = torch.argmax(outputs, dim=1)
-
-            for i in range(len(imgs)):
-                if preds[i] != labels[i] and len(misclassified) < num_images:
-                    misclassified.append(
-                        (imgs[i], CLASS_NAMES[labels[i]], CLASS_NAMES[preds[i]])
-                    )
-
-    if misclassified:
-        images = [img.cpu() for img, _, _ in misclassified]
-        captions = [f"True: {true}, Pred: {pred}" for _, true, pred in misclassified]
-
-        wandb.log(
-            {
-                "misclassified_examples": [
-                    wandb.Image(img, caption=caption)
-                    for img, caption in zip(images, captions)
-                ]
-            }
-        )
 
 
 def main():
-    current_dir = Path(__file__).parent.absolute()
-    checkpoint_dir = current_dir / "trained_models"
-    data_dir = current_dir.parent / "Classification_data"
-    logs_dir = current_dir / "logs"
+    torch.set_float32_matmul_precision("medium")
+
+    base_dir = Path(__file__).parent.parent
+    ckpt_dir = base_dir / "cnnmlp" / "trained_models"
+    data_dir = base_dir / "Classification_data"
+    logs_dir = base_dir / "cnnmlp" / "logs"
+
+    ckpt_list = glob.glob(str(ckpt_dir / "*.ckpt"))
+    assert len(ckpt_list) == 1, "Expected exactly one checkpoint"
 
     wandb.init(
-        project="cnnmlp-classification",
-        name="test-run",
+        project="image-classification",
+        name="cnnmlp-eval",
         dir=str(logs_dir),
         job_type="eval",
+        group="CNNMLP",
     )
 
-    ckpt_list = glob.glob(str(checkpoint_dir / "*.ckpt"))
-    assert len(ckpt_list) == 1, "Expected exactly one checkpoint"
-    ckpt_path = ckpt_list[0]
+    model = CNNMLPClassifier(num_classes=6)
+    lit_model = (
+        LitClassifier.load_from_checkpoint(
+            ckpt_list[0],
+            model=model,
+            num_classes=6,
+            lr=1e-3,
+            weight_decay=1e-4,
+        )
+        .cuda()
+        .eval()
+    )
 
-    model = CNNMLPClassifier.load_from_checkpoint(ckpt_path, num_classes=6).cuda()
+    datamodule = UniversalDataModule(
+        data_dir=str(data_dir),
+        batch_size=64,
+        val_split=0.1,
+        use_kornia_aug=False,
+    )
+    datamodule.setup(stage="test")
 
-    data_module = ClassificationDataModule(data_dir=str(data_dir), batch_size=64)
-    data_module.setup()
-    test_loader = data_module.test_dataloader()
+    test_loader = datamodule.test_dataloader()
+    test_loss, test_acc = evaluate_metrics(lit_model, test_loader)
 
-    test_loss, test_acc = log_test_metrics(model, test_loader)
-    log_misclassified_images(model, test_loader)
-
+    wandb.log(
+        {
+            "test/loss": test_loss,
+            "test/accuracy": test_acc,
+        }
+    )
     wandb.summary.update(
-        {"final_test_loss": test_loss, "final_test_accuracy": test_acc}
+        {
+            "final_test_loss": test_loss,
+            "final_test_accuracy": test_acc,
+        }
     )
+
+    log_misclassified_images(lit_model, test_loader)
 
     wandb.finish()
 
 
 if __name__ == "__main__":
-    torch.set_float32_matmul_precision("medium")
     main()

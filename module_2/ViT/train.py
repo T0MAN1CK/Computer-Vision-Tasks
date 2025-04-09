@@ -1,24 +1,24 @@
-import os
-import torch
-import pytorch_lightning as pl
-from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
-from pytorch_lightning.loggers import WandbLogger
-import wandb
+# ruff: noqa: E402
 
-from models.model import ViTModule
-from data.datamodule import ImageClassificationDataModule
-from pytorch_lightning.callbacks import EarlyStopping
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+import torch
+from models.model import ViT
+from shared.litmodule import LitClassifier
+from shared.train_utils import train_model
+from shared.datamodule import UniversalDataModule
 
 
 def main():
-    pl.seed_everything(42)
+    torch.set_float32_matmul_precision("medium")
 
-    # Config
-    data_dir = "module_2/Classification_data"
-    logs_dir = "module_2/ViT/wandblogs"
-    checkpoint_dir = "module_2/ViT/checkpoints"
-    os.makedirs(logs_dir, exist_ok=True)
-    os.makedirs(checkpoint_dir, exist_ok=True)
+    base_dir = Path(__file__).parent.parent
+    data_dir = base_dir / "Classification_data"
+    logs_dir = base_dir / "ViT" / "wandblogs"
+    checkpoint_dir = base_dir / "ViT" / "checkpoints"
 
     config = {
         "batch_size": 256,
@@ -29,55 +29,33 @@ def main():
         "architecture": "VisionTransformer",
     }
 
-    wandb_logger = WandbLogger(
-        project="vit-classification",
-        name="training-run",
-        save_dir=logs_dir,
-        log_model=False,
-        config=config,
-    )
-
-    model = ViTModule(
+    backbone = ViT(n_classes=config["num_classes"])
+    lit_model = LitClassifier(
+        model=backbone,
         num_classes=config["num_classes"],
         lr=config["lr"],
         weight_decay=config["weight_decay"],
     )
-    data_module = ImageClassificationDataModule(
-        data_dir=data_dir, batch_size=config["batch_size"]
+
+    datamodule = UniversalDataModule(
+        data_dir=str(data_dir),
+        batch_size=config["batch_size"],
+        val_split=0.2,
+        resize=(144, 144),
+        use_kornia_aug=True,
     )
 
-    checkpoint_callback = ModelCheckpoint(
-        monitor="val_acc",
-        mode="max",
-        save_top_k=1,
-        dirpath=checkpoint_dir,
-        filename="vit-{epoch:02d}-{val_acc:.2f}",
+    train_model(
+        model_name="vit-bs256-lr3e4",
+        model=lit_model,
+        datamodule=datamodule,
+        config=config,
+        wandb_project="image-classification",
+        logs_dir=str(logs_dir),
+        checkpoint_dir=str(checkpoint_dir),
+        group_name="ViT",
     )
-    lr_monitor = LearningRateMonitor(logging_interval="epoch")
-
-    early_stop = EarlyStopping(monitor="val_acc", patience=10, mode="max", verbose=True)
-
-    trainer = pl.Trainer(
-        max_epochs=config["max_epochs"],
-        accelerator="gpu",
-        precision="16-mixed",
-        logger=wandb_logger,
-        callbacks=[checkpoint_callback, lr_monitor, early_stop],
-        log_every_n_steps=50,
-    )
-
-    wandb_logger.watch(model, log="all", log_freq=100)
-
-    trainer.fit(model, datamodule=data_module)
-
-    print("\n" + "=" * 50)
-    print(f"Best model saved at: {checkpoint_callback.best_model_path}")
-    print(f"Validation accuracy: {checkpoint_callback.best_model_score:.4f}")
-    print("=" * 50 + "\n")
-
-    wandb.finish()
 
 
 if __name__ == "__main__":
-    torch.set_float32_matmul_precision("medium")
     main()

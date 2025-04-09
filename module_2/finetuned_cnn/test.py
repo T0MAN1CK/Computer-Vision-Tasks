@@ -1,107 +1,80 @@
 # ruff: noqa: E402
 
 import torch
-import os
 import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 import wandb
 import glob
-import torch.nn.functional as F
-
-root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, root_dir)
-
-from finetuned_cnn.models.model import FinetunedResNet
-from finetuned_cnn.datamodule import ClassificationDataModule
-from finetuned_cnn.data.dataset import CLASS_NAMES
-
-
-def evaluate_metrics(model, dataloader):
-    model.eval()
-    total_correct = 0
-    total_samples = 0
-    total_loss = 0.0
-
-    with torch.no_grad():
-        for images, targets in dataloader:
-            images = images.to("cuda")
-            targets = targets.to("cuda")
-            logits = model(images)
-            loss = F.cross_entropy(logits, targets)
-            preds = torch.argmax(logits, dim=1)
-
-            total_correct += (preds == targets).sum().item()
-            total_samples += targets.size(0)
-            total_loss += loss.item() * targets.size(0)
-
-    avg_loss = total_loss / total_samples
-    avg_acc = total_correct / total_samples
-    return avg_loss, avg_acc
-
-
-def log_misclassified_images(model, dataloader):
-    model.eval()
-    misclassified_images = []
-    misclassified_preds = []
-    misclassified_targets = []
-
-    with torch.no_grad():
-        for batch in dataloader:
-            images, targets = batch
-            images = images.to("cuda")
-            targets = targets.to("cuda")
-            logits = model(images)
-            preds = torch.argmax(logits, dim=1)
-            mismatches = preds != targets
-
-            misclassified_images.extend(images[mismatches].cpu())
-            misclassified_preds.extend(preds[mismatches].cpu())
-            misclassified_targets.extend(targets[mismatches].cpu())
-
-    logged_images = []
-    for img, pred, target in zip(
-        misclassified_images, misclassified_preds, misclassified_targets
-    ):
-        img = img.permute(1, 2, 0).numpy()
-        caption = f"True: {CLASS_NAMES[target]} | Pred: {CLASS_NAMES[pred]}"
-        logged_images.append(wandb.Image(img, caption=caption))
-
-    if logged_images:
-        wandb.log({"misclassified_examples": logged_images})
+from pathlib import Path
+from models.model import FinetunedResNet
+from shared.litmodule import LitClassifier
+from shared.datamodule import UniversalDataModule
+from shared.test_utils import evaluate_metrics, log_misclassified_images
 
 
 def main():
+    torch.set_float32_matmul_precision("medium")
+
+    base_dir = Path(__file__).parent.parent
+    ckpt_dir = base_dir / "finetuned_cnn" / "checkpoints"
+    data_dir = base_dir / "Classification_data"
+    logs_dir = base_dir / "finetuned_cnn" / "wandblogs"
+
+    ckpt_list = glob.glob(str(ckpt_dir / "*.ckpt"))
+    assert len(ckpt_list) == 1, "Expected exactly one checkpoint"
+
     wandb.init(
-        project="finetuned-cnn-classification",
-        name="test-run",
-        dir="module_2/finetuned_cnn/wandblogs",
+        project="image-classification",
+        name="finetuned-eval",
+        dir=str(logs_dir),
         job_type="eval",
+        group="FinetunedCNN",
     )
 
-    ckpt_list = glob.glob("module_2/finetuned_cnn/checkpoints/*.ckpt")
-    assert len(ckpt_list) == 1, "Expected exactly one checkpoint"
-    model = FinetunedResNet.load_from_checkpoint(ckpt_list[0])
-    model.cuda()
-    model.eval()
+    model = FinetunedResNet(num_classes=6)
+    lit_model = (
+        LitClassifier.load_from_checkpoint(
+            ckpt_list[0],
+            model=model,
+            num_classes=6,
+            lr=1e-3,
+            weight_decay=1e-4,
+        )
+        .cuda()
+        .eval()
+    )
 
-    datamodule = ClassificationDataModule(
-        data_dir="module_2/Classification_data", batch_size=64
+    datamodule = UniversalDataModule(
+        data_dir=str(data_dir),
+        batch_size=64,
+        val_split=0.2,
+        use_kornia_aug=False,
     )
     datamodule.setup(stage="test")
-    test_loader = datamodule.test_dataloader()
 
-    # Evaluate and log
-    test_loss, test_acc = evaluate_metrics(model, test_loader)
-    wandb.log({"test/loss": test_loss, "test/accuracy": test_acc})
+    test_loader = datamodule.test_dataloader()
+    test_loss, test_acc = evaluate_metrics(lit_model, test_loader)
+
+    wandb.log(
+        {
+            "test/loss": test_loss,
+            "test/accuracy": test_acc,
+        }
+    )
     wandb.summary.update(
-        {"final_test_loss": test_loss, "final_test_accuracy": test_acc}
+        {
+            "final_test_loss": test_loss,
+            "final_test_accuracy": test_acc,
+        }
     )
 
-    # Log misclassified examples
-    log_misclassified_images(model, test_loader)
+    log_misclassified_images(lit_model, test_loader)
 
     wandb.finish()
 
 
 if __name__ == "__main__":
-    torch.set_float32_matmul_precision("medium")
     main()

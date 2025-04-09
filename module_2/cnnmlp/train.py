@@ -1,23 +1,28 @@
+# ruff: noqa: E402
+
 import torch
+import sys
 from pathlib import Path
-import pytorch_lightning as pl
-import wandb
-from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
-from pytorch_lightning.loggers import WandbLogger
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+
+from pathlib import Path
 from models.cnn_mlp import CNNMLPClassifier
-from data.dataset import ClassificationDataModule
+from shared.datamodule import UniversalDataModule
+from shared.litmodule import LitClassifier
+from shared.train_utils import train_model
 
 
 def main():
-    pl.seed_everything(42)
+    torch.set_float32_matmul_precision("medium")
+    seed = 42
+    torch.manual_seed(seed)
 
-    current_dir = Path(__file__).parent.absolute()
-    data_dir = current_dir.parent / "Classification_data"
-    checkpoint_dir = current_dir / "trained_models"
-    logs_dir = current_dir / "logs"
-
-    checkpoint_dir.mkdir(parents=True, exist_ok=True)
-    logs_dir.mkdir(parents=True, exist_ok=True)
+    base_dir = Path(__file__).parent.parent
+    data_dir = base_dir / "Classification_data"
+    logs_dir = base_dir / "cnnmlp" / "logs"
+    checkpoint_dir = base_dir / "cnnmlp" / "trained_models"
 
     config = {
         "batch_size": 256,
@@ -28,52 +33,33 @@ def main():
         "architecture": "CNN+MLP",
     }
 
-    data_module = ClassificationDataModule(
-        data_dir=str(data_dir),
-        batch_size=config["batch_size"],
-    )
-
-    model = CNNMLPClassifier(
+    model = CNNMLPClassifier(num_classes=config["num_classes"])
+    lit_model = LitClassifier(
+        model=model,
         num_classes=config["num_classes"],
         lr=config["lr"],
         weight_decay=config["weight_decay"],
     )
 
-    checkpoint_callback = ModelCheckpoint(
-        monitor="val_acc",
-        mode="max",
-        save_top_k=1,
-        save_weights_only=True,
-        dirpath=str(checkpoint_dir),
-        filename="best-model-{epoch:02d}-{val_acc:.2f}",
+    datamodule = UniversalDataModule(
+        data_dir=str(data_dir),
+        batch_size=config["batch_size"],
+        val_split=0.1,
+        resize=(150, 150),
+        use_kornia_aug=True,
     )
-    lr_monitor = LearningRateMonitor(logging_interval="epoch")
 
-    wandb_logger = WandbLogger(
-        project="cnnmlp-classification",
-        name="training-run",
-        save_dir=str(logs_dir),
-        log_model=False,
+    train_model(
+        model_name="cnnmlp-bs256-lr1e3",
+        model=lit_model,
+        datamodule=datamodule,
         config=config,
+        wandb_project="image-classification",
+        logs_dir=str(logs_dir),
+        checkpoint_dir=str(checkpoint_dir),
+        group_name="CNNMLP",
     )
-
-    trainer = pl.Trainer(
-        max_epochs=config["max_epochs"],
-        accelerator="gpu",
-        devices=1,
-        precision=16,
-        callbacks=[checkpoint_callback, lr_monitor],
-        logger=wandb_logger,
-        log_every_n_steps=50,
-    )
-
-    wandb_logger.watch(model, log="all", log_freq=100)
-
-    trainer.fit(model, datamodule=data_module)
-
-    wandb.finish()
 
 
 if __name__ == "__main__":
-    torch.set_float32_matmul_precision("medium")
     main()
