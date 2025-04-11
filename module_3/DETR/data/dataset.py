@@ -146,7 +146,7 @@ class SKU110KDataset(Dataset):
                     cv2.cvtColor(img_with_boxes, cv2.COLOR_RGB2BGR),
                 )
 
-            # ✅ Clear CUDA memory if needed
+            #  Clear CUDA memory if needed
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
