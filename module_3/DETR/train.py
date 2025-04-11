@@ -72,6 +72,8 @@ def main():
         model_name="DETR",
         checkpoint_dir=str(checkpoint_dir),
         checkpoint_name=checkpoint_name,
+        max_epochs=5,
+        check_val_every_n_epoch=1,
     )
 
 

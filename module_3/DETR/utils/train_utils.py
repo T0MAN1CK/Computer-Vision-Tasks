@@ -1,7 +1,7 @@
 import os
 import torch
 import pytorch_lightning as pl
-from pytorch_lightning.callbacks import ModelCheckpoint
+from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 from pytorch_lightning.loggers import WandbLogger
 from torch.utils.data import DataLoader
 
@@ -15,7 +15,7 @@ def train_model(
     checkpoint_name: str = "best.ckpt",
     project_name: str = "module_3",
     max_epochs: int = 10,
-    check_val_every_n_epoch: int = 5,
+    check_val_every_n_epoch: int = 2,
 ):
     os.makedirs(checkpoint_dir, exist_ok=True)
 
@@ -32,6 +32,10 @@ def train_model(
         mode="min",
     )
 
+    early_stop_callback = EarlyStopping(
+        monitor="val_loss", patience=2, mode="min", verbose=True
+    )
+
     # --- Trainer ---
     trainer = pl.Trainer(
         accelerator="gpu" if torch.cuda.is_available() else "cpu",
@@ -40,7 +44,7 @@ def train_model(
         logger=wandb_logger,
         log_every_n_steps=10,
         check_val_every_n_epoch=check_val_every_n_epoch,
-        callbacks=[checkpoint_callback],
+        callbacks=[checkpoint_callback, early_stop_callback],
     )
 
     trainer.fit(model, train_loader, val_loader)

@@ -4,9 +4,14 @@ from torch.utils.data import Dataset
 from torchvision.transforms import functional as F
 from pathlib import Path
 import cv2
+import os
 import numpy as np
 import kornia.augmentation as K
 from typing import Optional, Tuple
+
+os.environ["OPENCV_LOG_LEVEL"] = "SILENT"
+cv2.setNumThreads(0)
+cv2.ocl.setUseOpenCL(False)
 
 
 class SKU110KDataset(Dataset):
@@ -81,72 +86,82 @@ class SKU110KDataset(Dataset):
         y2 = y_coords.max(dim=1).values
         return torch.stack([x1, y1, x2, y2], dim=1)
 
-    def __getitem__(self, idx):
-        image_name = self.image_names[idx]
+    def __getitem__(self, idx, attempt: int = 0):
+        try:
+            image_name = self.image_names[idx]
+            rows = self.image_groups.get_group(image_name)
+            image_path = self.image_dir / image_name
 
-        rows = self.image_groups.get_group(image_name)
+            if not image_path.exists():
+                raise FileNotFoundError(f"[Dataset] Image not found: {image_path}")
 
-        image_path = self.image_dir / image_name
-        if not image_path.exists():
-            raise FileNotFoundError(f"[Dataset] Image not found: {image_path}")
+            image = cv2.imread(str(image_path))
+            if image is None:
+                raise ValueError(
+                    f"[Dataset] Failed to read image with OpenCV: {image_path}"
+                )
 
-        image = cv2.imread(str(image_path))
-        if image is None:
-            raise ValueError(
-                f"[Dataset] Failed to read image with OpenCV: {image_path}"
+            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            h, w, _ = image.shape
+
+            boxes = torch.tensor(
+                rows[["x1", "y1", "x2", "y2"]].values.astype(np.float32)
             )
+            labels = torch.ones((len(boxes),), dtype=torch.int64)
+            image_tensor = F.to_tensor(image)
 
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        h, w, _ = image.shape
+            if self.use_aug:
+                image_tensor = image_tensor.unsqueeze(0)
+                polygons = self.xyxy_to_polygon(boxes).unsqueeze(0)
+                image_tensor, polygons = self.aug(image_tensor, polygons)
+                boxes = self.polygon_to_xyxy(polygons.squeeze(0)).to("cpu")
+                image_tensor = image_tensor.squeeze(0).to("cpu")
 
-        boxes = rows[["x1", "y1", "x2", "y2"]].values.astype(np.float32)
-        boxes = torch.tensor(boxes)
-        labels = torch.ones((len(boxes),), dtype=torch.int64)
+                boxes[:, 0::2] = boxes[:, 0::2].clamp(0, w)
+                boxes[:, 1::2] = boxes[:, 1::2].clamp(0, h)
 
-        image_tensor = F.to_tensor(image)  # (C, H, W)
+                box_w = boxes[:, 2] - boxes[:, 0]
+                box_h = boxes[:, 3] - boxes[:, 1]
+                valid = (box_w > 1) & (box_h > 1)
+                boxes = boxes[valid]
+                labels = labels[valid]
 
-        if self.use_aug:
-            image_tensor = image_tensor.unsqueeze(0)  # (1, C, H, W)
-            polygons = self.xyxy_to_polygon(boxes).unsqueeze(0)  # (1, N, 4, 2)
+            if self.resize_to is not None:
+                orig_h, orig_w = image_tensor.shape[-2:]
+                image_tensor = F.resize(image_tensor, self.resize_to)
+                scale_w = self.resize_to[1] / orig_w
+                scale_h = self.resize_to[0] / orig_h
+                boxes = boxes * torch.tensor([scale_w, scale_h, scale_w, scale_h])
 
-            image_tensor, polygons = self.aug(image_tensor, polygons)
+            target = {"boxes": boxes, "labels": labels, "image_id": torch.tensor(idx)}
 
-            boxes = self.polygon_to_xyxy(polygons.squeeze(0)).to("cpu")
-            image_tensor = image_tensor.squeeze(0).to("cpu")
+            if self.visualize:
+                from DETR.utils.vis_utils import draw_boxes_on_image
 
-            #  Clamp boxes to image size
-            boxes[:, 0::2] = boxes[:, 0::2].clamp(0, w)
-            boxes[:, 1::2] = boxes[:, 1::2].clamp(0, h)
+                img_np = image_tensor.permute(1, 2, 0).numpy()
+                img_np = (img_np * 255).astype(np.uint8)
+                img_with_boxes = draw_boxes_on_image(img_np, boxes)
+                cv2.imwrite(
+                    f"augmented_{idx}.jpg",
+                    cv2.cvtColor(img_with_boxes, cv2.COLOR_RGB2BGR),
+                )
 
-            #  Filter out invalid boxes
-            box_w = boxes[:, 2] - boxes[:, 0]
-            box_h = boxes[:, 3] - boxes[:, 1]
-            valid = (box_w > 1) & (box_h > 1)
-            boxes = boxes[valid]
-            labels = labels[valid]
+            # ✅ Clear CUDA memory if needed
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
-        target = {"boxes": boxes, "labels": labels, "image_id": torch.tensor(idx)}
+            return image_tensor, target
 
-        if self.visualize:
-            from DETR.utils.vis_utils import draw_boxes_on_image
+        except RuntimeError as e:
+            if "out of memory" in str(e).lower():
+                print(f"[CUDA OOM] Skipping index {idx}: {e}")
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                return self.__getitem__((idx + 1) % len(self), attempt + 1)
+            raise e
 
-            img_np = image_tensor.permute(1, 2, 0).numpy()
-            img_np = (img_np * 255).astype(np.uint8)
-            img_with_boxes = draw_boxes_on_image(img_np, boxes)
-            cv2.imwrite(
-                f"augmented_{idx}.jpg", cv2.cvtColor(img_with_boxes, cv2.COLOR_RGB2BGR)
-            )
-
-        if self.resize_to is not None:
-            orig_h, orig_w = image_tensor.shape[-2:]
-            image_tensor = F.resize(image_tensor, self.resize_to)
-
-            new_h, new_w = self.resize_to
-            scale_w = new_w / orig_w
-            scale_h = new_h / orig_h
-
-            boxes = target["boxes"]
-            boxes = boxes * torch.tensor([scale_w, scale_h, scale_w, scale_h])
-            target["boxes"] = boxes
-
-        return image_tensor, target
+        except Exception as e:
+            print(f"[Dataset ERROR] Skipping index {idx}: {e}")
+            if attempt > 5:
+                raise RuntimeError(f"Too many failures at index {idx}")
+            return self.__getitem__((idx + 1) % len(self), attempt + 1)
