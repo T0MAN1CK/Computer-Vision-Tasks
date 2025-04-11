@@ -25,3 +25,8 @@ module_2/**/logs/
 
 **/.ruff_cache/
 **/__init__.py
+
+module_3/**/checkpoints/
+module_3/FasterRCNN/checkpoints/
+module_3/DETR/checkpoints/
+module_3/dataset/
