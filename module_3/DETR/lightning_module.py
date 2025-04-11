@@ -9,8 +9,8 @@ def loss_fn(pred_logits, pred_boxes, tgt_labels, tgt_boxes):
     # Flatten predictions: [batch_size, num_queries, num_classes+1]
     bs, num_queries, num_classes_plus1 = pred_logits.shape
     pred_logits = pred_logits.reshape(bs * num_queries, num_classes_plus1)
-    # Repeat ground truth to align with predicted queries (TEMP workaround for mismatch)
-    tgt_labels = tgt_labels[: bs * num_queries]  # clip or pad as eeded
+    # Repeat ground truth to align with predicted queries
+    tgt_labels = tgt_labels[: bs * num_queries]  # clip or pad
     cls_loss = nn.CrossEntropyLoss()(pred_logits, tgt_labels)
     pred_boxes = pred_boxes.reshape(bs * num_queries, 4)
     tgt_boxes = tgt_boxes[: bs * num_queries]  # clip or pad
