@@ -4,9 +4,9 @@ import os
 import cv2
 import numpy as np
 
-from DETR.data.dataset import SKU110KDataset as DETRDataset
-from FasterRCNN.data.dataset import SKU110KDataset as FRCNNDataset
-from FasterRCNN.utils.visualize import draw_boxes_on_image
+from shared.dataset import SKU110KDataset as DETRDataset
+from shared.dataset import SKU110KDataset as FRCNNDataset
+from shared.visualize import draw_boxes_on_image
 
 # Suppress OpenCV warnings
 os.environ["OPENCV_LOG_LEVEL"] = "SILENT"

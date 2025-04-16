@@ -1,10 +1,13 @@
-# FasterRCNN/utils/visualize.py
 import cv2
 import numpy as np
+import torch
 
 
 def draw_boxes_on_image(
-    image: np.ndarray, boxes, color=(0, 255, 0), thickness=2
+    image: np.ndarray,
+    boxes: torch.Tensor,
+    color=(0, 255, 0),
+    thickness: int = 2,
 ) -> np.ndarray:
     image_copy = image.copy()
     for box in boxes:

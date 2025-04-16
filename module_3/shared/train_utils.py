@@ -1,15 +1,18 @@
 import os
+import torch
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 from pytorch_lightning.loggers import WandbLogger
+from torch.utils.data import DataLoader
 
 
 def train_model(
-    model,
-    train_loader,
-    val_loader,
+    model: pl.LightningModule,
+    train_loader: DataLoader,
+    val_loader: DataLoader,
     model_name: str,
-    checkpoint_dir: str = "FasterRCNN/checkpoints",
+    checkpoint_dir: str,
+    checkpoint_name: str = "best.ckpt",
     project_name: str = "module_3",
     max_epochs: int = 10,
     check_val_every_n_epoch: int = 2,
@@ -22,7 +25,7 @@ def train_model(
     # --- Checkpoint Callback ---
     checkpoint_callback = ModelCheckpoint(
         dirpath=checkpoint_dir,
-        filename="best",
+        filename=checkpoint_name.replace(".ckpt", ""),
         save_top_k=1,
         verbose=True,
         monitor="val_loss",
@@ -36,7 +39,7 @@ def train_model(
 
     # --- Trainer ---
     trainer = pl.Trainer(
-        accelerator="gpu",
+        accelerator="gpu" if torch.cuda.is_available() else "cpu",
         devices=1,
         max_epochs=max_epochs,
         logger=wandb_logger,

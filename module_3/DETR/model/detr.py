@@ -37,6 +37,9 @@ class DETR(nn.Module):
         self.linear_bbox = nn.Linear(hidden_dim, 4)
 
     def forward(self, inputs: torch.Tensor):
+        if isinstance(inputs, (list, tuple)):
+            inputs = torch.stack(inputs)  # convert list -> batch tensor
+
         x = self.backbone(inputs)
         h = self.conv(x)
 
@@ -53,12 +56,14 @@ class DETR(nn.Module):
             .unsqueeze(1)
         )
 
-        h_flat = h.flatten(2).permute(2, 0, 1)  # [HW, B, C]
+        h_flat = h.flatten(2).permute(2, 0, 1)
         queries = self.query_pos.unsqueeze(1).repeat(1, inputs.size(0), 1)
-
-        hs = self.transformer(h_flat + pos, queries)  # [num_queries, B, C]
+        hs = self.transformer(h_flat + pos, queries)
 
         outputs_class = self.linear_class(hs)
         outputs_bbox = self.linear_bbox(hs).sigmoid()
 
-        return outputs_class.transpose(0, 1), outputs_bbox.transpose(0, 1)
+        return {
+            "pred_logits": outputs_class.transpose(0, 1),
+            "pred_boxes": outputs_bbox.transpose(0, 1),
+        }

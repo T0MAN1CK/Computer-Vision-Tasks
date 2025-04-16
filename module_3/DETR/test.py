@@ -6,9 +6,9 @@ from torch.utils.data import DataLoader
 
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
-from DETR.data.dataset import SKU110KDataset
+from shared.dataset import SKU110KDataset
 from DETR.lightning_module import DETRLightningModule
-from DETR.utils.test_utils import evaluate_map_metrics, log_worst_predictions
+from shared.test_utils import evaluate_map_metrics, log_worst_predictions
 from DETR.model.detr import DETR
 
 base_dir = Path(__file__).resolve().parent.parent
@@ -16,8 +16,8 @@ ckpt_path = base_dir / "DETR" / "checkpoints" / "best-v1.ckpt"
 
 
 def collate_fn(batch):
-    images, targets = zip(*batch)
-    return list(images), list(targets)
+    images, targets = zip(*batch)  # images: tuple of tensors
+    return list(images), list(targets)  # both lists
 
 
 def main():
@@ -27,7 +27,7 @@ def main():
 
     # --- WandB Init ---
     wandb.init(
-        project="module_3",
+        project="mod3_testing",
         name="DETR_Eval",
         job_type="eval",
         group="DETR",
@@ -52,6 +52,7 @@ def main():
         use_aug=False,
         visualize=False,
         resize_to=(800, 800),
+        model_type="detr",
     )
 
     loader = DataLoader(

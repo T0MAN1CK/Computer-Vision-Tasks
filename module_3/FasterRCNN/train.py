@@ -5,9 +5,9 @@ from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
-from FasterRCNN.data.dataset import SKU110KDataset
+from shared.dataset import SKU110KDataset
 from FasterRCNN.lightning_module import FasterRCNNLightningModule
-from FasterRCNN.utils.train_utils import train_model
+from shared.train_utils import train_model
 
 
 def collate_fn(batch):
@@ -24,11 +24,13 @@ def main():
     train_dataset = SKU110KDataset(
         csv_path=base_dir / "dataset/sample_SKU110K/annotations/annotations_train.csv",
         image_dir=base_dir / "dataset/sample_SKU110K/images",
+        model_type="fasterrcnn",
         use_aug=True,
     )
     val_dataset = SKU110KDataset(
         csv_path=base_dir / "dataset/sample_SKU110K/annotations/annotations_val.csv",
         image_dir=base_dir / "dataset/sample_SKU110K/images",
+        model_type="fasterrcnn",
         use_aug=False,
     )
 
@@ -61,6 +63,7 @@ def main():
         checkpoint_dir=str(checkpoint_dir),
         max_epochs=5,
         check_val_every_n_epoch=1,
+        project_name="mod3_testing",
     )
 
 

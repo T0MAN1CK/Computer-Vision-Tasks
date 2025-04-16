@@ -5,10 +5,10 @@ import sys
 
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
-from DETR.data.dataset import SKU110KDataset
+from shared.dataset import SKU110KDataset
 from DETR.model.detr import DETR
 from DETR.lightning_module import DETRLightningModule
-from DETR.utils.train_utils import train_model
+from shared.train_utils import train_model
 
 base_dir = Path(__file__).resolve().parent.parent
 checkpoint_dir = base_dir / "DETR" / "checkpoints"
@@ -74,6 +74,7 @@ def main():
         checkpoint_name=checkpoint_name,
         max_epochs=5,
         check_val_every_n_epoch=1,
+        project_name="mod3_testing",
     )
 
 

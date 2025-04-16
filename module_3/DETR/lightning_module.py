@@ -42,8 +42,7 @@ class DETRLightningModule(pl.LightningModule):
 
     def forward(self, images: list[torch.Tensor]) -> dict:
         images = torch.stack(images)  # (B, C, H, W)
-        pred_logits, pred_boxes = self.model(images)
-        return {"pred_logits": pred_logits, "pred_boxes": pred_boxes}
+        return self.model(images)
 
     def step(self, batch, stage: str):
         images, targets = batch

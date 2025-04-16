@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from scipy.optimize import linear_sum_assignment
 from torchvision.ops import generalized_box_iou
+from torchvision.ops import box_convert
 
 
 class HungarianMatcher(nn.Module):
@@ -18,22 +19,23 @@ class HungarianMatcher(nn.Module):
     def forward(self, pred_logits, pred_boxes, tgt_labels, tgt_boxes):
         bs, num_queries = pred_logits.shape[:2]
 
-        out_prob = pred_logits.softmax(-1)  # [B, num_queries, num_classes]
-        out_bbox = pred_boxes  # [B, num_queries, 4]
+        # Flatten predictions
+        out_prob = pred_logits.softmax(-1)
+        out_bbox = pred_boxes
 
         indices = []
         for b in range(bs):
             cost_class = -out_prob[b][:, tgt_labels[b]]
+
+            pred_boxes_xyxy = box_convert(out_bbox[b], in_fmt="cxcywh", out_fmt="xyxy")
+            tgt_boxes_xyxy = box_convert(tgt_boxes[b], in_fmt="cxcywh", out_fmt="xyxy")
+
             cost_bbox = torch.cdist(out_bbox[b], tgt_boxes[b], p=1)
-            cost_giou = -generalized_box_iou(out_bbox[b], tgt_boxes[b])
 
-            C = (
-                self.cost_class * cost_class
-                + self.cost_bbox * cost_bbox
-                + self.cost_giou * cost_giou
-            )
+            cost_giou = -generalized_box_iou(pred_boxes_xyxy, tgt_boxes_xyxy)
+
+            C = cost_bbox + cost_giou + cost_class
             C = C.cpu()
-
             i, j = linear_sum_assignment(C)
             indices.append(
                 (
@@ -84,11 +86,17 @@ class SetCriterion(nn.Module):
             [t["boxes"][i] for t, (_, i) in zip(targets, indices)], dim=0
         )
 
+        src_boxes_xyxy = box_convert(src_boxes, in_fmt="cxcywh", out_fmt="xyxy")
+        target_boxes_xyxy = box_convert(target_boxes, in_fmt="cxcywh", out_fmt="xyxy")
+
         loss_bbox = F.l1_loss(
             src_boxes, target_boxes, reduction="none"
         ).sum() / src_boxes.size(0)
+        loss_giou = (
+            1
+            - torch.diag(generalized_box_iou(src_boxes_xyxy, target_boxes_xyxy)).mean()
+        )
 
-        loss_giou = 1 - torch.diag(generalized_box_iou(src_boxes, target_boxes)).mean()
         return {"loss_bbox": loss_bbox, "loss_giou": loss_giou}
 
     def _get_src_permutation_idx(self, indices):
@@ -99,16 +107,43 @@ class SetCriterion(nn.Module):
         return batch_idx, src_idx
 
     def forward(self, outputs, targets):
+        valid_targets = []
+        valid_outputs_logits = []
+        valid_outputs_boxes = []
+
+        for logit, box, tgt in zip(
+            outputs["pred_logits"], outputs["pred_boxes"], targets
+        ):
+            if tgt["boxes"].numel() > 0:
+                valid_outputs_logits.append(logit.unsqueeze(0))
+                valid_outputs_boxes.append(box.unsqueeze(0))
+                valid_targets.append(tgt)
+
+        if not valid_targets:
+            return {
+                "total_loss": torch.tensor(0.0, device=outputs["pred_logits"].device)
+            }
+
+        outputs_logits = torch.cat(valid_outputs_logits, dim=0)
+        outputs_boxes = torch.cat(valid_outputs_boxes, dim=0)
+
         indices = self.matcher(
-            outputs["pred_logits"],
-            outputs["pred_boxes"],
-            [t["labels"] for t in targets],
-            [t["boxes"] for t in targets],
+            outputs_logits,
+            outputs_boxes,
+            [t["labels"] for t in valid_targets],
+            [t["boxes"] for t in valid_targets],
         )
+
+        patched_outputs = {
+            "pred_logits": outputs_logits,
+            "pred_boxes": outputs_boxes,
+        }
 
         losses = {}
         for loss in self.losses:
-            losses.update(getattr(self, f"loss_{loss}")(outputs, targets, indices))
+            losses.update(
+                getattr(self, f"loss_{loss}")(patched_outputs, valid_targets, indices)
+            )
 
         total_loss = sum(losses[k] * self.weight_dict[k] for k in losses)
         losses["total_loss"] = total_loss
